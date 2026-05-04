@@ -914,4 +914,397 @@ NEXT_PUBLIC_SITE_URL=https://velareexotics.com
 
 ---
 
-*End of master plan v1.0. Next document: `DESIGN_SYSTEM.md` once brand direction is locked.*
+## Appendix D: Account Creation & Auth Flows
+
+### D.1 Sign-up flow (single flow, role assigned later)
+
+We do **not** make people choose "renter or host" at signup. Everyone signs up the same way; the host capabilities unlock when they start a listing. This is critical for conversion — most owners come in browsing first.
+
+**Step 1 — Create account**
+- Email + password (or Google/Apple OAuth)
+- Phone number (required, used for trip security)
+- Name (legal name, must match ID later)
+- Date of birth (gates min-age requirements)
+- Accept Terms + Privacy
+
+**Step 2 — Verify**
+- Email verification link (valid 24h)
+- SMS verification code to phone (6-digit, valid 10min)
+- Until both verified, account can browse but not book or list
+
+**Step 3 — First action gate**
+The user lands on the homepage logged in. Two paths:
+- **Wants to rent** → first booking attempt triggers the renter completion flow
+- **Wants to list** → clicks "List Your Car" → triggers the host completion flow
+
+This lazy-load approach means we don't ask for a passport on signup and lose 70% of users.
+
+### D.2 Renter completion flow (triggered on first booking)
+
+Required before any booking confirms:
+1. Driver's license photo (front + back)
+2. Selfie (Persona facial match)
+3. ID verification result (auto-verified or manual review)
+4. Driving record (MVR pull via Checkr — happens in background)
+5. Payment method on file (Stripe)
+6. Address verification
+
+User can browse, save favorites, and message owners *without* completing this. They only get blocked at the "Confirm booking" step.
+
+### D.3 Host completion flow (triggered on first listing)
+
+Required before a listing goes live:
+1. Everything in renter flow (we verify all hosts as renters too)
+2. Stripe Connect onboarding (Express account; Stripe handles tax forms)
+3. Vehicle title proof (photo of title or registration matching their name)
+4. Vehicle insurance proof
+5. Bank account for payouts
+6. W-9 / tax info (for 1099-K)
+
+### D.4 Dual-role handling — *the answer to your question*
+
+**A user has one account. The `role` field is a multi-value flag.**
+
+```
+user.role = ["renter"]                    # default after signup
+user.role = ["renter", "host"]            # after creating first listing
+user.role = ["host"]                      # never — once a renter, always a renter
+```
+
+**What this looks like in the UI:**
+- A logged-in user always sees their **renter dashboard** at `/account`
+- If they have `host` role, the account menu also shows "Host Dashboard" → `/host`
+- A small toggle in the top-right of the dashboard switches contexts:
+  ```
+  [ Travel ▾ ]   ←→   [ Hosting ▾ ]
+  ```
+- Same nav pattern Airbnb uses. Industry-tested.
+
+**The "I signed up to rent, now I want to list" flow:**
+1. User clicks "List Your Car" anywhere on the site
+2. We detect they're logged in, role doesn't include `host`
+3. Drop them into the host completion flow (D.3) — they don't re-sign up
+4. On completion, `host` is added to their role array
+5. Their listing goes into review, they're redirected to `/host`
+6. Renter context still works — they can still book cars from other hosts
+
+The reverse ("I'm a host, can I rent too") works automatically — every host already has `renter` because of D.3 step 1.
+
+### D.5 Account settings page (`/account/settings`)
+
+Sections:
+- **Profile** — name, photo, bio (shown publicly on listings/reviews), language
+- **Verification** — what's verified, what's missing (with re-submit buttons)
+- **Login & Security** — email, password change, 2FA setup, active sessions, login history
+- **Payment Methods** — saved cards, default payment, billing address
+- **Payouts** (host only) — Stripe Connect dashboard link, payout schedule, tax docs download
+- **Notifications** — email/SMS/push toggles per event type
+- **Privacy** — data export, account deletion (GDPR/CCPA compliance)
+
+### D.6 Password reset & account recovery
+- Email-based reset (signed token, 1h expiry)
+- If 2FA is on, SMS code as second factor for reset
+- Recovery email + recovery codes (downloaded once, hashed in DB)
+- Master account locked accounts visible in admin panel for support recovery
+
+---
+
+## Appendix E: Listing Search & Discovery
+
+### E.1 The `/fleet` browse page
+
+**Layout:**
+- Left rail (desktop) / bottom sheet (mobile): filters
+- Right: results grid (3-col desktop, 1-col mobile) + sort + view toggle
+- Top: search bar (location), date pickers, instant-book toggle
+- Optional: map view alternate (split-screen with Mapbox)
+
+### E.2 Full filter spec
+
+| Filter | Type | Notes |
+|---|---|---|
+| **Location** | Geocoded text + radius | "Within 25mi of Beverly Hills" |
+| **Dates** | Date range | Affects availability |
+| **Price per day** | Range slider | $200–$10,000+ |
+| **Make** | Multi-select | Lambo, Ferrari, Porsche, etc. |
+| **Model** | Multi-select | Filters dynamically based on selected makes |
+| **Year** | Range | 2010–2026 |
+| **Vehicle class** | Multi-select | Supercar, Hyper, Luxury Sedan, Convertible, SUV, Classic |
+| **Body style** | Multi-select | Coupe, Convertible, Sedan, SUV, Wagon |
+| **Transmission** | Single | Manual / Automatic / DCT / Any |
+| **Drivetrain** | Multi-select | RWD, AWD, 4WD |
+| **Fuel** | Multi-select | Gas, Hybrid, EV |
+| **Seats** | 2 / 4 / 5+ | |
+| **Color** | Multi-select | Exterior color (with swatches) |
+| **Mileage limit** | Range | Min daily allowance the renter wants |
+| **Delivery** | Toggle | "Available for delivery to my location" |
+| **Instant book** | Toggle | No host approval needed |
+| **Pet-friendly** | Toggle | (Some owners say no) |
+| **Track-approved** | Toggle | For track program |
+| **Available for production** | Toggle | Static rentals |
+| **Min host rating** | 4.0+ / 4.5+ / 4.8+ | |
+| **Velare Verified Photography** | Toggle | All approved listings have it; rare it'd be off |
+| **Velare Black eligible** | Toggle | (Hidden for non-Black members) |
+
+### E.3 Sort options
+- **Recommended** (default — our ranking algorithm)
+- Price: low to high
+- Price: high to low
+- Newest listings
+- Highest rated
+- Most booked
+- Distance (nearest first)
+
+### E.4 Recommended ranking (the default sort)
+Not just price. A score combining:
+- Listing quality (photos, completeness, response rate)
+- Host rating
+- Booking conversion rate
+- Distance from user
+- Date availability match
+- Velare Plus/Black tier (slight boost)
+- Featured listings (paid, capped at 3 per page, **always labeled** "Featured")
+
+### E.5 Saved searches & favorites
+- Heart icon on each listing → saves to `/account/favorites`
+- "Save this search" button — saves filter set, optionally with email alerts
+- "Recently viewed" — last 20 listings shown on homepage when logged in
+
+### E.6 Search infrastructure
+- Typesense (or Algolia) keeps a denormalized listing index
+- Updated on listing create/update via Inngest job
+- Geosearch supported (lat/lng + radius)
+- Filter facets returned with each query (counts per facet)
+- Sub-100ms response target
+
+### E.7 Map view
+- Mapbox cluster pins
+- Tap pin → preview card slides up
+- Pan map → "Search this area" button appears
+- Match `/fleet` filters
+
+---
+
+## Appendix F: Booking Flow
+
+### F.1 Renter booking flow
+
+1. **Browse** `/fleet` → click listing
+2. **Vehicle detail page**: select dates, see total price breakdown live
+3. **Click "Reserve"**
+   - If verification incomplete → renter completion flow (D.2)
+   - If complete → review screen
+4. **Review screen**: dates, pickup/delivery, protection plan choice, fee breakdown, total
+5. **Add-ons**: extra mileage, refuel option, delivery, concierge services
+6. **Payment**: Stripe Payment Element, supports cards, Apple Pay, Google Pay, Link
+7. **Confirm**:
+   - Instant Book listings → booking confirmed, owner notified
+   - Request listings → "Request submitted, owner has 24h to accept"
+8. **Confirmation page**: booking ID, host contact unlocked at T-24h, contract preview
+
+### F.2 Host approval flow (for non-instant listings)
+- Push + email + SMS notification on new request
+- 24-hour SLA to accept/decline
+- Auto-decline if no response (with reason logged)
+- Decline reasons (analytics): "dates blocked", "not comfortable with renter", "vehicle in service", other
+- High decline rates flag the host for outreach
+
+### F.3 Pre-trip
+- T-72h: reminder email with handoff checklist
+- T-24h: host contact info exchanged, pickup confirmed
+- T-2h: pickup reminder
+- Inspection app pushed to both parties (web + mobile)
+
+### F.4 During trip
+- Messaging open between renter and owner
+- Extension requests in-app (renter requests, owner approves, additional charge auto-billed)
+- Mid-trip support button → routes to concierge or T&S based on urgency
+- Telematics dashboard (host only) — current location, speed, geofence status
+
+### F.5 Post-trip
+- Inspection video required from both parties
+- Mileage logged, overage auto-charged if over allowance
+- Fuel level checked (if rented full, returned at less, refuel fee applied)
+- Tolls reconciled (we partner with PlatePass or similar; auto-bill renter)
+- Both parties prompted to review (1–5 stars + written; reviews go live after both submit or 14 days)
+
+### F.6 Cancellation policies
+Three host-selectable policies, transparent on listing:
+- **Flexible**: full refund up to 24h before
+- **Moderate**: full refund up to 7 days before, 50% within 7 days
+- **Strict**: 50% refund up to 7 days before, no refund within 7 days
+- Velare adds: weather/force-majeure override at our discretion
+
+---
+
+## Appendix G: Payment Processor Configuration
+
+### G.1 Stripe Connect setup
+**Stripe Connect (Express)** is the right product:
+- Renters pay Velare (we own the customer relationship)
+- Velare splits payment: commission to platform, rest to host's connected account
+- Host onboarding via Stripe-hosted flow (we don't handle SSNs, bank accounts, etc.)
+- Stripe handles 1099-K filings for hosts
+
+### G.2 Where this is configured (the master account view)
+
+**Admin → Settings → Payments**
+
+Visible only to roles with `SETTINGS_PAYMENTS_EDIT` permission (default: Master + Finance).
+
+**Subsections:**
+
+**Processor credentials**
+- Stripe publishable key (read-only display — set via env var, surfaced here for reference)
+- Stripe secret key (set via env var, **never displayed**, just shows "✓ Configured" or "Not set")
+- Webhook signing secret (env var, status indicator)
+- Test mode toggle (uses `pk_test`/`sk_test` from separate env vars)
+- "Test connection" button — runs a no-op API call, surfaces auth errors
+
+**Commission tiers**
+- Standard plan: `12%` (editable, with effective-date)
+- Plus plan: `15%`
+- Black plan: `8%`
+- Saving any change creates an audit log entry and prompts confirmation
+- Existing bookings keep their original rate; new bookings use the current rate
+
+**Renter fees**
+- Service fee percentage
+- Young driver fee ($/day)
+- Damage protection prices (Basic / Premium / Black)
+- Cleaning fee cap
+
+**Payout schedule**
+- Default: 24h after trip completion (covers dispute window)
+- Configurable: 1, 3, 5, or 7 days
+- Per-host override available
+- "Hold all payouts" emergency switch (with reason required, audit-logged, alerts master)
+
+**Currencies & regions**
+- Initially: USD only
+- Per-region settings when international (Stripe Connect supports it)
+
+**Refunds & disputes**
+- Refund authority limits per role (e.g., Concierge can refund up to $500, Manager up to $5K, Master unlimited)
+- Stripe dispute alerts → automatic ticket in disputes queue
+
+**Tax**
+- Velare's tax ID
+- 1099-K threshold settings (federal default $600)
+- Sales tax handled per state (uses TaxJar or Stripe Tax integration)
+
+### G.3 Future: secondary processor
+The architecture should not couple us to Stripe forever. The payment service has a clean interface so a second processor (Adyen, Braintree) could be added for international or redundancy without ripping out booking code.
+
+```ts
+// packages/payments/processor.ts
+interface PaymentProcessor {
+  createPaymentIntent(...): Promise<...>;
+  refund(...): Promise<...>;
+  createConnectedAccount(...): Promise<...>;
+  payout(...): Promise<...>;
+}
+
+// implementations: StripeProcessor (default), AdyenProcessor (future)
+```
+
+---
+
+## Appendix H: Turo Feature-Parity Checklist
+
+Direct mapping of every Turo feature to where it lives in this plan, plus things they don't have that we will.
+
+### Account & identity
+| Turo has | Velare equivalent | Status |
+|---|---|---|
+| Email + social signup | Same + Apple OAuth | §D.1 |
+| Phone verification | Yes | §D.1 |
+| ID verification | Persona | §D.2 |
+| Driving record check | Checkr/Samba MVR | §D.2 |
+| Profile photo + bio | Yes | §D.5 |
+| Driver's license on file | Yes | §D.2 |
+
+### Renter side
+| Turo has | Velare equivalent | Status |
+|---|---|---|
+| Search by location | Yes (geocoded) | §E.1 |
+| Date range search | Yes | §E.1 |
+| Filters: make/model/price/features | Yes — expanded set | §E.2 |
+| Map view | Yes (Mapbox) | §E.7 |
+| Saved searches | Yes | §E.5 |
+| Favorites | Yes | §E.5 |
+| Vehicle detail page | Yes | §A (homepage), §F |
+| Reviews/ratings | Yes (both directions) | §F.5 |
+| Photos gallery | Yes — pro photography | §4.5 |
+| Calendar availability | Yes | §F.1 |
+| Instant book | Yes | §F.1 |
+| Booking request | Yes | §F.2 |
+| Messaging with host | Yes | §F.4 |
+| Trip extension | Yes | §F.4 |
+| Cancellation | Yes — 3 policies | §F.6 |
+| Receipts/invoices | Yes | §G |
+| Trip photos at handoff | Yes — structured video | §F.3, §F.5 |
+| Mileage tracking | Yes — telematics-backed | §F.5 |
+| Toll handling | PlatePass partnership | §F.5 |
+| Fuel reconciliation | Yes | §F.5 |
+| In-app support | Yes — concierge line | §11 |
+| Trip history | Yes | `/account/trips` |
+
+### Host side
+| Turo has | Velare equivalent | Status |
+|---|---|---|
+| Add a vehicle | Yes (multi-step) | `/host/listings/new` |
+| Edit listing | Yes | `/host/listings` |
+| Calendar with daily pricing | Yes | `/host/calendar` |
+| Discounts (weekly/monthly) | Yes — explicit weekly_rate, monthly_rate fields | Schema §14 |
+| Mileage allowance setting | Yes | Schema §14 |
+| Custom delivery zones | Yes (radius + zones) | Schema §14 |
+| Auto-pricing | Yes — opt-in dynamic pricing | §12.3 |
+| Earnings dashboard | Yes | `/host/earnings` |
+| Payouts | Stripe Connect | §G.1 |
+| Tax docs (1099) | Stripe handles | §G.1 |
+| Block dates | Yes | `/host/calendar` |
+| Reviews of renters | Yes | §F.5 |
+| Messaging with renters | Yes | §F.4 |
+| Damage claims | Yes — 48h SLA | §13 |
+
+### Things Turo doesn't have (that we will)
+- Free professional photography
+- Velare Concierge service layer
+- Track-day program
+- Production/photo rental product
+- AR "see it in your driveway"
+- Member events (drives, gala)
+- Owner profit-share
+- Velare Black tier
+- Hotel white-label
+- Agreed-value insurance for collectors
+- Telematics standard on all listings
+- AI listing-quality coach
+- AI-assisted dispute triage
+- Lower commission than Turo's most-popular plan
+
+### Things Turo has that we are *not* building
+- Long-distance/airport-only economy fleet — wrong segment
+- Allstate-branded protection plans — we do our own underwriting partnership
+- "Cars at a Distance" cross-state delivery network at scale — Phase 4+
+- Commercial van/truck listings — wrong segment
+
+---
+
+## Appendix I: Updated Open Questions
+
+In addition to the questions in §17, the following operational decisions should be made before build:
+
+10. **Phone verification SMS provider** — Twilio is in the stack; have you set up an account?
+11. **Identity provider** — Persona vs Stripe Identity? Persona has better UX, Stripe is one fewer vendor. Recommend Persona.
+12. **MVR provider** — Checkr ($) vs Samba Safety ($$) vs Driver's History ($)? Pricing varies; Checkr is most common for marketplaces.
+13. **Default cancellation policy** — Flexible / Moderate / Strict at platform default? Recommend Moderate as default with hosts able to override.
+14. **Reviews-go-live timing** — both parties submit (Airbnb model) or post-immediately? Recommend "both submit OR 14 days" — encourages mutual review without holding back legitimate ones.
+15. **Hosts who only want to do production rentals** — separate listing type, or a flag on existing listings? Recommend a flag — same listing, opted-in for static rental.
+16. **Currency at launch** — USD only (recommended) or also EUR/AED/GBP for international cars?
+17. **Dispute appeal process** — single decision or escalation path? Recommend escalation: T&S agent → manager → master account, with each level having a defined SLA.
+
+---
+
+*End of master plan v1.1. Changes in this version: Appendices D–I added covering account flows, search/filters, booking flow, payment configuration, Turo feature parity, and revised open questions. Next document: `DESIGN_SYSTEM.md` once brand direction is locked.*
